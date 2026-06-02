@@ -1,0 +1,13 @@
+{
+  "name": "Twilio Video Connect",
+  "description": "A high-quality group video calling application with screen sharing and integrated chat, powered by Twilio Video.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture",
+    "compute-pressure"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

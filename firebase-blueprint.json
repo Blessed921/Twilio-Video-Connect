@@ -1,0 +1,38 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A video chat room session.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "active": { "type": "boolean" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["name", "createdAt", "active"]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "A user in a room.",
+      "type": "object",
+      "properties": {
+        "identity": { "type": "string" },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["online", "offline"] }
+      },
+      "required": ["identity", "joinedAt", "status"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomName}": {
+      "schema": "Room",
+      "description": "Active rooms indexed by name."
+    },
+    "/rooms/{roomName}/participants/{identity}": {
+      "schema": "Participant",
+      "description": "Participants in a room."
+    }
+  }
+}
