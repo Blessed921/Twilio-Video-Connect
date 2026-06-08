@@ -15,11 +15,11 @@ export default function App() {
   const [initialMicOn, setInitialMicOn] = useState(true);
   const [initialVideoOn, setInitialVideoOn] = useState(true);
 
-  const handleJoin = useCallback(async (identity: string, roomName: string, initialMicOn: boolean, initialVideoOn: boolean) => {
+  const handleJoin = useCallback(async (identity: string, roomName: string, initialMicOn: boolean, initialVideoOn: boolean, preGeneratedUniqueId?: string) => {
     try {
       setInitialMicOn(initialMicOn);
       setInitialVideoOn(initialVideoOn);
-      const uniqueIdentity = `${identity}_${Math.random().toString(36).substring(2, 7)}`;
+      const uniqueIdentity = preGeneratedUniqueId || `${identity}_${Math.random().toString(36).substring(2, 7)}`;
       const response = await fetch('/api/token', {
         method: 'POST',
         headers: {

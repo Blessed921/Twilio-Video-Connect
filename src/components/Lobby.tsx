@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Video, User, Hash, ArrowRight, LogIn, Mic, MicOff, VideoIcon, VideoOff, AlertCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
-import { auth, signInWithGoogle } from '../lib/firebase';
+import { auth, signInWithGoogle, db } from '../lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { doc, getDoc, setDoc, onSnapshot, deleteDoc, serverTimestamp } from 'firebase/firestore';
 
 interface LobbyProps {
-  onJoin: (identity: string, roomName: string, initialMicOn: boolean, initialVideoOn: boolean) => void;
+  onJoin: (identity: string, roomName: string, initialMicOn: boolean, initialVideoOn: boolean, preGeneratedUniqueId?: string) => void;
 }
 
 export default function Lobby({ onJoin }: LobbyProps) {
@@ -15,6 +16,43 @@ export default function Lobby({ onJoin }: LobbyProps) {
   const [isJoining, setIsJoining] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Waiting Room state variables
+  const [knockStatus, setKnockStatus] = useState<'idle' | 'knocking' | 'rejected'>('idle');
+  const [myGuestUniqueId, setMyGuestUniqueId] = useState<string | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, []);
+
+  const handleCancelKnocking = async () => {
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+    if (myGuestUniqueId && roomName) {
+      try {
+        const participantDocRef = doc(db, 'rooms', roomName.trim(), 'participants', myGuestUniqueId);
+        await deleteDoc(participantDocRef);
+      } catch (e) {
+        console.error('Error deleting knock doc:', e);
+      }
+    }
+    setKnockStatus('idle');
+    setIsJoining(false);
+    setMyGuestUniqueId(null);
+  };
+
+  const handleReturnToLobby = () => {
+    setKnockStatus('idle');
+    setIsJoining(false);
+    setMyGuestUniqueId(null);
+  };
 
   // Meet-style preview states
   const [micOn, setMicOn] = useState(true);
@@ -104,16 +142,84 @@ export default function Lobby({ onJoin }: LobbyProps) {
     if (identity.trim() && roomName.trim() && !isJoining) {
       setIsJoining(true);
       
-      // Stop preview tracks so they don't block Twilio stream locks
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
+      const targetRoom = roomName.trim();
+      const targetIdentity = identity.trim();
+      const generatedGuestId = `${targetIdentity}_${Math.random().toString(36).substring(2, 7)}`;
 
       try {
-        await onJoin(identity.trim(), roomName.trim(), micOn, videoOn);
+        // Query room document
+        const roomDocRef = doc(db, 'rooms', targetRoom);
+        const roomDocSnap = await getDoc(roomDocRef);
+
+        let isRoomCreator = false;
+        
+        if (!roomDocSnap.exists()) {
+          // Room does not exist, so current user creates it and is the host!
+          await setDoc(roomDocRef, {
+            name: targetRoom,
+            createdBy: targetIdentity,
+            active: true,
+            createdAt: serverTimestamp()
+          });
+          isRoomCreator = true;
+        } else {
+          // Room exists, see if user is the original creator
+          const roomData = roomDocSnap.data();
+          if (roomData.createdBy === targetIdentity) {
+            isRoomCreator = true;
+          }
+        }
+
+        // If host (or host rejoining), bypass wait queue and join immediately
+        if (isRoomCreator) {
+          if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+          }
+          await onJoin(targetIdentity, targetRoom, micOn, videoOn, generatedGuestId);
+          return;
+        }
+
+        // Otherwise (it exists and we are not the creator), we are a guest knocking
+        setMyGuestUniqueId(generatedGuestId);
+        setKnockStatus('knocking');
+
+        const participantDocRef = doc(db, 'rooms', targetRoom, 'participants', generatedGuestId);
+        await setDoc(participantDocRef, {
+          identity: generatedGuestId,
+          status: 'knocking',
+          joinedAt: serverTimestamp(),
+          lastSeen: serverTimestamp()
+        });
+
+        const snapUnsub = onSnapshot(participantDocRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            const partData = docSnap.data();
+            if (partData.status === 'online') {
+              snapUnsub();
+              unsubscribeRef.current = null;
+              setKnockStatus('idle');
+              setIsJoining(false);
+              
+              if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+              }
+              await onJoin(targetIdentity, targetRoom, micOn, videoOn, generatedGuestId);
+            } else if (partData.status === 'rejected') {
+              snapUnsub();
+              unsubscribeRef.current = null;
+              setKnockStatus('rejected');
+              setIsJoining(false);
+            }
+          }
+        });
+
+        unsubscribeRef.current = snapUnsub;
+
       } catch (err) {
-        console.error('Failed to join:', err);
+        console.error('Failed to initiate room check or knock:', err);
+        alert('Verification failed. Re-access room connection.');
         setIsJoining(false);
+        setKnockStatus('idle');
       }
     }
   };
@@ -123,6 +229,74 @@ export default function Lobby({ onJoin }: LobbyProps) {
       <div className="flex flex-col items-center justify-center min-h-[400px]">
         <div className="w-10 h-10 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
         <p className="text-slate-500 text-xs tracking-widest uppercase">Initializing Security...</p>
+      </div>
+    );
+  }
+
+  if (knockStatus === 'knocking') {
+    return (
+      <div className="w-full max-w-md bg-slate-950/80 border border-slate-800/80 rounded-3xl p-8 shadow-2xl relative overflow-hidden backdrop-blur-xl">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="text-center relative z-10 space-y-6">
+          <div className="flex justify-center">
+            <div className="relative flex items-center justify-center">
+              <div className="absolute w-24 h-24 border-2 border-indigo-500/10 rounded-full animate-ping duration-[2000ms]" />
+              <div className="absolute w-16 h-16 border border-indigo-500/20 rounded-full animate-pulse" />
+              <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shadow-inner">
+                <Video strokeWidth={1.5} size={28} className="animate-bounce" />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-light tracking-tight text-white">Knocking on the door...</h2>
+            <p className="text-slate-400 text-xs leading-relaxed max-w-xs mx-auto">
+              You are in the waiting room for <span className="font-semibold text-indigo-400">#{roomName}</span>. The meeting host will let you in shortly.
+            </p>
+          </div>
+
+          <div className="pt-4">
+            <button
+              onClick={handleCancelKnocking}
+              className="px-6 py-3 border border-slate-800/80 bg-slate-900/50 hover:bg-slate-900 text-xs font-semibold tracking-wider text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
+            >
+              Cancel Request
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (knockStatus === 'rejected') {
+    return (
+      <div className="w-full max-w-md bg-slate-950/80 border border-red-500/20 rounded-3xl p-8 shadow-2xl relative overflow-hidden backdrop-blur-xl">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-red-500/5 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="text-center relative z-10 space-y-6">
+          <div className="flex justify-center">
+            <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500 shadow-inner">
+              <AlertCircle strokeWidth={1.5} size={28} />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-light tracking-tight text-white">Admission Declined</h2>
+            <p className="text-slate-400 text-xs leading-relaxed max-w-xs mx-auto">
+              The host of space <span className="font-semibold text-red-400">#{roomName}</span> has declined your request to join this session.
+            </p>
+          </div>
+
+          <div className="pt-4">
+            <button
+              onClick={handleReturnToLobby}
+              className="px-6 py-3 bg-red-600/10 hover:bg-red-600/20 border border-red-500/20 text-red-400 font-semibold text-xs tracking-wider rounded-xl transition-all cursor-pointer"
+            >
+              Back to Lobby
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

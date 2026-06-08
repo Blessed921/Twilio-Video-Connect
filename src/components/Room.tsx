@@ -10,7 +10,7 @@ import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { Message } from '../types';
 import { db, auth } from '../lib/firebase';
-import { doc, setDoc, updateDoc, serverTimestamp, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
 
 interface RoomProps {
   token: string;
@@ -33,6 +33,69 @@ export default function Room({ token, roomName, identity, initialMicOn = true, i
   const [chatInput, setChatInput] = useState('');
   const [permissionError, setPermissionError] = useState<{ type: 'camera' | 'microphone', message: string } | null>(null);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
+  
+  const [isHost, setIsHost] = useState(false);
+  const [knockingRequests, setKnockingRequests] = useState<any[]>([]);
+
+  useEffect(() => {
+    const checkHostStatus = async () => {
+      try {
+        const roomDoc = await getDoc(doc(db, 'rooms', roomName));
+        if (roomDoc.exists()) {
+          const data = roomDoc.data();
+          if (data.createdBy && identity.startsWith(data.createdBy)) {
+            setIsHost(true);
+          }
+        }
+      } catch (e) {
+        console.error('Error checking host status:', e);
+      }
+    };
+    checkHostStatus();
+  }, [roomName, identity]);
+
+  useEffect(() => {
+    if (!roomName) return;
+    const participantsCol = collection(db, 'rooms', roomName, 'participants');
+    const unsubscribe = onSnapshot(participantsCol, (snapshot) => {
+      const knocking: any[] = [];
+      snapshot.forEach(d => {
+        const data = d.data();
+        if (data.status === 'knocking') {
+          knocking.push({
+            id: d.id,
+            ...data
+          });
+        }
+      });
+      setKnockingRequests(knocking);
+    });
+    return () => unsubscribe();
+  }, [roomName]);
+
+  const admitGuest = async (guestUniqueId: string) => {
+    try {
+      const participantDocRef = doc(db, 'rooms', roomName, 'participants', guestUniqueId);
+      await updateDoc(participantDocRef, {
+        status: 'online',
+        lastSeen: serverTimestamp()
+      });
+    } catch (e) {
+      console.error('Error admitting guest:', e);
+    }
+  };
+
+  const rejectGuest = async (guestUniqueId: string) => {
+    try {
+      const participantDocRef = doc(db, 'rooms', roomName, 'participants', guestUniqueId);
+      await updateDoc(participantDocRef, {
+        status: 'rejected',
+        lastSeen: serverTimestamp()
+      });
+    } catch (e) {
+      console.error('Error rejecting guest:', e);
+    }
+  };
   
   useEffect(() => {
     const timer = setInterval(() => {
@@ -532,6 +595,61 @@ export default function Room({ token, roomName, identity, initialMicOn = true, i
                 >
                   <X size={16} />
                 </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Host Admissions Waiting Room Overlay */}
+        <AnimatePresence>
+          {isHost && knockingRequests.length > 0 && (
+            <motion.div 
+              initial={{ x: 100, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 100, opacity: 0 }}
+              className="absolute top-20 right-4 z-[45] w-full max-w-sm px-4"
+            >
+              <div className="bg-slate-900/95 border border-indigo-500/30 backdrop-blur-2xl text-slate-200 p-5 rounded-2xl shadow-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-400">Waiting Room Knocks ({knockingRequests.length})</h3>
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-medium">As Host, you manage entry</span>
+                </div>
+
+                <div className="space-y-3 max-h-48 overflow-y-auto scrollbar-hide">
+                  {knockingRequests.map((req) => {
+                    const humanName = req.identity.split('_')[0];
+                    return (
+                      <div key={req.id} className="flex items-center justify-between bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-lg flex items-center justify-center text-xs font-bold uppercase">
+                            {humanName.charAt(0)}
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-white leading-tight">{humanName}</p>
+                            <p className="text-[9px] text-slate-500 font-mono">Wants to join</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => admitGuest(req.id)}
+                            className="bg-indigo-600 hover:bg-indigo-550 text-white rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition-all cursor-pointer"
+                          >
+                            Admit
+                          </button>
+                          <button
+                            onClick={() => rejectGuest(req.id)}
+                            className="bg-slate-900 border border-slate-800 hover:bg-red-950/20 hover:text-red-400 hover:border-red-500/20 text-slate-400 rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition-all cursor-pointer"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </motion.div>
           )}

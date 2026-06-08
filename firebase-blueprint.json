@@ -20,7 +20,7 @@
         "identity": { "type": "string" },
         "joinedAt": { "type": "string", "format": "date-time" },
         "lastSeen": { "type": "string", "format": "date-time" },
-        "status": { "type": "string", "enum": ["online", "offline"] }
+        "status": { "type": "string", "enum": ["online", "offline", "knocking", "rejected"] }
       },
       "required": ["identity", "joinedAt", "status"]
     }
