@@ -42,7 +42,7 @@ graph TD
     O --> P[Client initialises Twilio Video Link]:::media
     
     %% Firestore Presence Logging & Live Frame
-    P --> Q[Create /rooms/{roomID} on Firestore]:::firebase
+    P --> Q["Create /rooms/{roomID} on Firestore"]:::firebase
     Q --> R[Register Participant Presence document]:::firebase
     R --> S[Activate 10s Presence Heartbeat Interval]:::firebase
     
